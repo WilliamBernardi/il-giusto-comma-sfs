@@ -1,0 +1,49 @@
+name: SFS Corpus Daily Refresh
+
+on:
+  schedule:
+    - cron: '30 3 * * *'  # Every day at 03:30 UTC
+  workflow_dispatch:        # Manual trigger
+
+concurrency:
+  group: sfs-corpus-refresh
+  cancel-in-progress: true
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout Corpus Repository
+        uses: actions/checkout@v4
+
+      - name: Make sfs-build executable
+        run: chmod +x tools/sfs-build
+
+      - name: Run Stateful Checkpoint Sync
+        run: |
+          ./tools/sfs-build --mode=checkpoint --out=.
+          EXIT_CODE=$?
+          echo "SFS Build completed with exit code $EXIT_CODE"
+          if [ $EXIT_CODE -eq 2 ]; then
+            echo "Verification gate failed! Aborting commit."
+            exit 2
+          fi
+          if [ $EXIT_CODE -ne 0 ] && [ $EXIT_CODE -ne 3 ]; then
+            echo "Sync encountered hard error."
+            exit $EXIT_CODE
+          fi
+
+      - name: Commit and Push Changes
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add sfs/ manifest.json entries.json .last_sync.json
+          if git diff --staged --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "chore(data): automated SFS corpus daily update"
+            git push
+          fi
